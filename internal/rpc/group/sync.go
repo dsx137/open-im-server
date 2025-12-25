@@ -2,6 +2,7 @@ package group
 
 import (
 	"context"
+	"errors"
 
 	"github.com/openimsdk/open-im-server/v3/internal/rpc/incrversion"
 	"github.com/openimsdk/open-im-server/v3/pkg/authverify"
@@ -12,23 +13,24 @@ import (
 	pbgroup "github.com/openimsdk/protocol/group"
 	"github.com/openimsdk/protocol/sdkws"
 	"github.com/openimsdk/tools/errs"
+	"github.com/openimsdk/tools/log"
 	"github.com/openimsdk/tools/mcontext"
 	"github.com/openimsdk/tools/utils/datautil"
 )
 
 const versionSyncLimit = 500
 
-func (g *groupServer) GetFullGroupMemberUserIDs(ctx context.Context, req *pbgroup.GetFullGroupMemberUserIDsReq) (*pbgroup.GetFullGroupMemberUserIDsResp, error) {
-	userIDs, err := g.db.FindGroupMemberUserID(ctx, req.GroupID)
+func (s *groupServer) GetFullGroupMemberUserIDs(ctx context.Context, req *pbgroup.GetFullGroupMemberUserIDsReq) (*pbgroup.GetFullGroupMemberUserIDsResp, error) {
+	userIDs, err := s.db.FindGroupMemberUserID(ctx, req.GroupID)
 	if err != nil {
 		return nil, err
 	}
-	if !authverify.IsAppManagerUid(ctx, g.config.Share.IMAdminUserID) {
+	if !authverify.IsAppManagerUid(ctx, s.config.Share.IMAdminUserID) {
 		if !datautil.Contain(mcontext.GetOpUserID(ctx), userIDs...) {
 			return nil, errs.ErrNoPermission.WrapMsg("op user not in group")
 		}
 	}
-	vl, err := g.db.FindMaxGroupMemberVersionCache(ctx, req.GroupID)
+	vl, err := s.db.FindMaxGroupMemberVersionCache(ctx, req.GroupID)
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +148,8 @@ func (s *groupServer) GetIncrementalGroupMember(ctx context.Context, req *pbgrou
 	return resp, nil
 }
 
-func (g *groupServer) GetIncrementalJoinGroup(ctx context.Context, req *pbgroup.GetIncrementalJoinGroupReq) (*pbgroup.GetIncrementalJoinGroupResp, error) {
-	if err := authverify.CheckAccessV3(ctx, req.UserID, g.config.Share.IMAdminUserID); err != nil {
+func (s *groupServer) GetIncrementalJoinGroup(ctx context.Context, req *pbgroup.GetIncrementalJoinGroupReq) (*pbgroup.GetIncrementalJoinGroupResp, error) {
+	if err := authverify.CheckAccessV3(ctx, req.UserID, s.config.Share.IMAdminUserID); err != nil {
 		return nil, err
 	}
 	opt := incrversion.Option[*sdkws.GroupInfo, pbgroup.GetIncrementalJoinGroupResp]{
@@ -155,9 +157,9 @@ func (g *groupServer) GetIncrementalJoinGroup(ctx context.Context, req *pbgroup.
 		VersionKey:      req.UserID,
 		VersionID:       req.VersionID,
 		VersionNumber:   req.Version,
-		Version:         g.db.FindJoinIncrVersion,
-		CacheMaxVersion: g.db.FindMaxJoinGroupVersionCache,
-		Find:            g.getGroupsInfo,
+		Version:         s.db.FindJoinIncrVersion,
+		CacheMaxVersion: s.db.FindMaxJoinGroupVersionCache,
+		Find:            s.getGroupsInfo,
 		Resp: func(version *model.VersionLog, delIDs []string, insertList, updateList []*sdkws.GroupInfo, full bool) *pbgroup.GetIncrementalJoinGroupResp {
 			return &pbgroup.GetIncrementalJoinGroupResp{
 				VersionID: version.ID.Hex(),
@@ -172,22 +174,29 @@ func (g *groupServer) GetIncrementalJoinGroup(ctx context.Context, req *pbgroup.
 	return opt.Build()
 }
 
-func (g *groupServer) BatchGetIncrementalGroupMember(ctx context.Context, req *pbgroup.BatchGetIncrementalGroupMemberReq) (*pbgroup.BatchGetIncrementalGroupMemberResp, error) {
+func (s *groupServer) BatchGetIncrementalGroupMember(ctx context.Context, req *pbgroup.BatchGetIncrementalGroupMemberReq) (*pbgroup.BatchGetIncrementalGroupMemberResp, error) {
 	var num int
 	resp := make(map[string]*pbgroup.GetIncrementalGroupMemberResp)
+
 	for _, memberReq := range req.ReqList {
 		if _, ok := resp[memberReq.GroupID]; ok {
 			continue
 		}
-		memberResp, err := g.GetIncrementalGroupMember(ctx, memberReq)
+		memberResp, err := s.GetIncrementalGroupMember(ctx, memberReq)
 		if err != nil {
+			if errors.Is(err, servererrs.ErrDismissedAlready) {
+				log.ZWarn(ctx, "Failed to get incremental group member", err, "groupID", memberReq.GroupID, "request", memberReq)
+				continue
+			}
 			return nil, err
 		}
+
 		resp[memberReq.GroupID] = memberResp
 		num += len(memberResp.Insert) + len(memberResp.Update) + len(memberResp.Delete)
 		if num >= versionSyncLimit {
 			break
 		}
 	}
+
 	return &pbgroup.BatchGetIncrementalGroupMemberResp{RespList: resp}, nil
 }
