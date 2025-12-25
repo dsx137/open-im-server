@@ -30,7 +30,6 @@ import (
 	"github.com/openimsdk/tools/errs"
 	"github.com/openimsdk/tools/log"
 	"github.com/openimsdk/tools/mcontext"
-	"github.com/openimsdk/tools/utils/stringutil"
 )
 
 var (
@@ -85,7 +84,7 @@ type Client struct {
 func (c *Client) ResetClient(ctx *UserConnContext, conn ClientConn, longConnServer LongConnServer) {
 	c.w = new(sync.Mutex)
 	c.conn = conn
-	c.PlatformID = stringutil.StringToInt(ctx.GetPlatformID())
+	c.PlatformID = ctx.GetPlatformID()
 	c.IsCompress = ctx.GetCompression()
 	c.IsBackground = ctx.GetBackground()
 	c.UserID = ctx.GetUserID()

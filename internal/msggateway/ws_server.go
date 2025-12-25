@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +28,8 @@ import (
 	"github.com/openimsdk/tools/utils/stringutil"
 	"golang.org/x/sync/errgroup"
 )
+
+var wsSuccessResponse, _ = json.Marshal(&apiresp.ApiResponse{})
 
 type LongConnServer interface {
 	Run(done chan error) error
@@ -448,11 +449,11 @@ func (ws *WsServer) unregisterClient(client *Client) {
 // validateRespWithRequest checks if the response matches the expected userID and platformID.
 func (ws *WsServer) validateRespWithRequest(ctx *UserConnContext, resp *pbAuth.ParseTokenResp) error {
 	userID := ctx.GetUserID()
-	platformID := stringutil.StringToInt32(ctx.GetPlatformID())
+	platformID := ctx.GetPlatformID()
 	if resp.UserID != userID {
 		return servererrs.ErrTokenInvalid.WrapMsg(fmt.Sprintf("token uid %s != userID %s", resp.UserID, userID))
 	}
-	if resp.PlatformID != platformID {
+	if int(resp.PlatformID) != platformID {
 		return servererrs.ErrTokenInvalid.WrapMsg(fmt.Sprintf("token platform %d != platformID %d", resp.PlatformID, platformID))
 	}
 	return nil
@@ -519,10 +520,16 @@ func (ws *WsServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.ZWarn(connContext, "websocket upgrade failed", err)
 		return
 	}
+	if connContext.ShouldSendResp() {
+		if err := conn.WriteMessage(websocket.TextMessage, wsSuccessResponse); err != nil {
+			log.ZWarn(connContext, "WriteMessage first response", err)
+			return
+		}
+	}
 	log.ZDebug(connContext, "new conn", "token", connContext.GetToken())
 
 	var pingInterval time.Duration
-	if connContext.GetPlatformID() == strconv.Itoa(constant.WebPlatformID) {
+	if connContext.GetPlatformID() == constant.WebPlatformID {
 		pingInterval = pingPeriod
 	}
 
